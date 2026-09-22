@@ -61,6 +61,7 @@ const RELEASE = "release";
  */
 const VIEW_FIELD = "seatView";
 const PAGE_MESSAGE = "thuum-seat";
+const PAGE_SHOWN = "thuum-seat-shown";
 const PAGE_OBJECT = "window.thuumSeat";
 
 type HeldSeat = {
@@ -150,6 +151,9 @@ export class SeatGateService extends ClientListener {
     if (view === undefined || view === null) {
       return;
     }
+    if (this.askedPageAt === 0) {
+      this.askedPageAt = Date.now();
+    }
     let json: string;
     try {
       json = JSON.stringify(view);
@@ -188,6 +192,18 @@ export class SeatGateService extends ClientListener {
    */
   private onBrowserMessage(e: BrowserMessageEvent): void {
     const a = e && e.arguments;
+
+    // THE PAGE SAYING IT DREW. Asking a page to draw and a page having drawn are not the same
+    // thing, and the difference is a player sitting at a connect screen forever - which is exactly
+    // what happened the first time this was tested, with the bundle installed and the page not.
+    if (a && a[0] === PAGE_SHOWN) {
+      if (!this.pageAnswered) {
+        this.pageAnswered = true;
+        logTrace(this, "The page has drawn the choice");
+      }
+      return;
+    }
+
     if (!a || a[0] !== PAGE_MESSAGE) {
       return;
     }
@@ -207,6 +223,29 @@ export class SeatGateService extends ClientListener {
     if (this.held === null || this.heldSince === 0) {
       return;
     }
+
+    // DEADMAN ONE: A PAGE THAT CANNOT ANSWER.
+    //
+    // Seconds, not minutes. If the realm has sent something to show and the page has not said it
+    // drew, there is nothing for the player to click and no amount of waiting will produce one. The
+    // commonest cause is the page and this bundle being different versions - they ship by different
+    // routes - so the message names that first.
+    if (this.askedPageAt !== 0 && !this.pageAnswered
+        && Date.now() - this.askedPageAt >= this.pageMustAnswerMs) {
+      logError(
+        this,
+        `The realm sent a character choice but the page never drew it `
+        + `(waited ${Math.round(this.pageMustAnswerMs / 1000)}s). Almost certainly this client `
+        + `bundle and Data/Platform/UI/index.html are different versions - they ship by different `
+        + `routes. Falling through to normal behaviour: you will be seated as whichever character `
+        + `the realm picked, which is what happens without this feature at all.`,
+      );
+      this.holding = false;
+      this.askedPageAt = 0;
+      this.release("the page never answered");
+      return;
+    }
+
     const heldFor = Date.now() - this.heldSince;
     if (heldFor < this.maxHoldMs) {
       return;
@@ -228,6 +267,8 @@ export class SeatGateService extends ClientListener {
     const held = this.held;
     this.held = null;
     this.heldSince = 0;
+    this.askedPageAt = 0;
+    this.pageAnswered = false;
     if (held === null) {
       return;
     }
@@ -244,5 +285,11 @@ export class SeatGateService extends ClientListener {
   private holding = false;
   private held: HeldSeat | null = null;
   private heldSince = 0;
+  /** When the realm last gave us something to show, and whether the page admitted drawing it. */
+  private askedPageAt = 0;
+  private pageAnswered = false;
+  /** Seconds: a page either draws promptly or is not going to. */
+  private readonly pageMustAnswerMs = 6000;
+  /** Minutes: a drawn page is waiting on a person, and people are slow. */
   private readonly maxHoldMs = 180000;
 }
