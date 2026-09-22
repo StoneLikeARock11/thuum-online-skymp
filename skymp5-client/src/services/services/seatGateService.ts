@@ -5,6 +5,10 @@ import { ConnectionMessage } from "../events/connectionMessage";
 import { CreateActorMessage } from "../messages/createActorMessage";
 import { CustomPacketMessage } from "../messages/customPacketMessage";
 import { ClientListener, CombinedController, Sp } from "./clientListener";
+// A cycle with authService (it looks this service up to ask whether a seat is held). Both sides
+// use the other only inside methods, never at module load, so the bindings are live by the time
+// either runs.
+import { AuthService } from "./authService";
 
 /**
  * THU'UM ONLINE FORK CHANGE. Hold `loadGame` until the realm says who the player is.
@@ -160,6 +164,17 @@ export class SeatGateService extends ClientListener {
     } catch (e) {
       logError(this, "A seat payload could not be re-serialised for the page:", e);
       return;
+    }
+    // THE LOGIN DIALOG COMES DOWN WHEN A CHOICE GOES UP. Upstream dismisses it on the player's own
+    // CreateActorMessage, because a loading screen always follows that; here a choice follows
+    // instead, on the same page, and on the first live test the stock "change account / Play /
+    // connecting..." panel stayed drawn on top of it. This is a widget hidden because a seat message
+    // ARRIVED - the payload is still not read - and the auth service's own guard makes it a no-op
+    // whenever the dialog is already gone.
+    try {
+      this.controller.lookupListener(AuthService).closeAuthDialog("a seat choice is being shown");
+    } catch (e) {
+      logError(this, "Could not close the login dialog before showing the choice:", e);
     }
     try {
       this.sp.browser.setVisible(true);

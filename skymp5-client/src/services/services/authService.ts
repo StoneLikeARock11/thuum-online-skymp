@@ -154,22 +154,37 @@ export class AuthService extends ClientListener {
     }
   }
 
-  private onCreateActorMessage(e: ConnectionMessage<CreateActorMessage>) {
-    // THU'UM ONLINE FORK CHANGE. Upstream can clear the page here because what follows is always
-    // a loading screen. While the seat gate holds, what follows is character select on that same
-    // page, so clearing it would blank the thing the player is about to choose from.
-    if (e.message.isMe && this.controller.lookupListener(SeatGateService).isHolding()) {
-      logTrace(this, `Received createActorMessage for self while the seat gate holds - leaving the page up`);
-      return;
+  /**
+   * THU'UM ONLINE FORK CHANGE. Close the login dialog, if it is open, and say which.
+   *
+   * Upstream closes it in exactly one place - the player's own CreateActorMessage - because what
+   * follows that message is always a loading screen. With the seat gate, what can follow instead is
+   * a character choice drawn by the page, and the login dialog would sit on top of it: on the first
+   * live test (2026-09-22) the stock "change account / Play / connecting..." panel stayed drawn over
+   * the choice, because nothing dismissed it any more. So the closing is its own method, called from
+   * the same place upstream calls it AND by the seat gate when it puts a choice on the page. The
+   * `authDialogOpen` guard makes the second call harmless wherever the first has already happened.
+   */
+  public closeAuthDialog(why: string): boolean {
+    if (!this.authDialogOpen) {
+      logTrace(this, `Not resetting widgets (${why}): the auth dialog was not open`);
+      return false;
     }
+    logTrace(this, `Resetting widgets: ${why}`);
+    this.sp.browser.executeJavaScript('window.skyrimPlatform.widgets.set([]);');
+    this.authDialogOpen = false;
+    return true;
+  }
+
+  private onCreateActorMessage(e: ConnectionMessage<CreateActorMessage>) {
+    // THU'UM ONLINE FORK CHANGE. An earlier version of this fork returned early here while the
+    // seat gate held, so as not to "blank the page the player is about to choose from". That was
+    // wrong twice over: resetting the widgets clears only the login dialog, never the page's own
+    // choice, and NOT resetting them is what left that dialog drawn on top of the choice. Upstream's
+    // behaviour is the right one and is kept; `closeAuthDialog` is the same code, callable by the
+    // gate as well.
     if (e.message.isMe) {
-      if (this.authDialogOpen) {
-        logTrace(this, `Received createActorMessage for self, resetting widgets`);
-        this.sp.browser.executeJavaScript('window.skyrimPlatform.widgets.set([]);');
-        this.authDialogOpen = false;
-      } else {
-        logTrace(this, `Received createActorMessage for self, but auth dialog was not open so not resetting widgets`);
-      }
+      this.closeAuthDialog("received createActorMessage for self");
     }
 
     this.loggingStartMoment = 0;
