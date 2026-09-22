@@ -39,6 +39,8 @@ import { SweetTaffySkillMenuService } from "./services/services/sweetTaffySkillM
 import { LoadOrderVerificationService } from "./services/services/loadOrderVerificationService";
 import { BrowserService } from "./services/services/browserService";
 import { AuthService } from "./services/services/authService";
+// THU'UM ONLINE FORK CHANGE - holds loadGame until the realm says who. See seatGateService.ts.
+import { SeatGateService } from "./services/services/seatGateService";
 import { NetInfoService } from "./services/services/netInfoService";
 import { AnimDebugService } from "./services/services/animDebugService";
 import { TimersService } from "./services/services/timersService";
@@ -102,6 +104,7 @@ const main = () => {
       new WorldCleanerService(sp, controller),
       new LoadOrderVerificationService(sp, controller),
       new BrowserService(sp, controller),
+      new SeatGateService(sp, controller),
       new AuthService(sp, controller),
       new NetInfoService(sp, controller),
       new AnimDebugService(sp, controller),

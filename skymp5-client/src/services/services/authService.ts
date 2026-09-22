@@ -6,6 +6,7 @@ import { ClientListener, CombinedController, Sp } from "./clientListener";
 import { BrowserMessageEvent, Menu, browser } from "skyrimPlatform";
 import { AuthNeededEvent } from "../events/authNeededEvent";
 import { BrowserWindowLoadedEvent } from "../events/browserWindowLoadedEvent";
+import { SeatGateService } from "./seatGateService";
 import { TimersService } from "./timersService";
 import { MasterApiAuthStatus } from "../messages_http/masterApiAuthStatus";
 import { logTrace, logError } from "../../logging";
@@ -154,6 +155,13 @@ export class AuthService extends ClientListener {
   }
 
   private onCreateActorMessage(e: ConnectionMessage<CreateActorMessage>) {
+    // THU'UM ONLINE FORK CHANGE. Upstream can clear the page here because what follows is always
+    // a loading screen. While the seat gate holds, what follows is character select on that same
+    // page, so clearing it would blank the thing the player is about to choose from.
+    if (e.message.isMe && this.controller.lookupListener(SeatGateService).isHolding()) {
+      logTrace(this, `Received createActorMessage for self while the seat gate holds - leaving the page up`);
+      return;
+    }
     if (e.message.isMe) {
       if (this.authDialogOpen) {
         logTrace(this, `Received createActorMessage for self, resetting widgets`);

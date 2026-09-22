@@ -46,6 +46,7 @@ import { HostStopMessage } from '../messages/hostStopMessage';
 import { ConnectionMessage } from '../events/connectionMessage';
 import { SetInventoryMessage } from '../messages/setInventoryMessage';
 import { CreateActorMessage, CreateActorMessageAdditionalProps } from '../messages/createActorMessage';
+import { SeatGateService } from './seatGateService';
 import { DestroyActorMessage } from '../messages/destroyActorMessage';
 import { SetRaceMenuOpenMessage } from '../messages/setRaceMenuOpenMessage';
 import { UpdatePropertyMessage } from '../messages/updatePropertyMessage';
@@ -279,7 +280,26 @@ export class RemoteServer extends ClientListener {
     });
   }
 
+  // THU'UM ONLINE FORK CHANGE. See seatGateService.ts for why this exists.
+  //
+  // Upstream acts on a `CreateActorMessage` the moment it arrives, and for `isMe` that means
+  // calling `loadGame` - the player is in the world as whichever character the server picked
+  // before anybody could be asked which one they wanted. When the realm has asked us to hold, the
+  // message is kept instead, and the newest held message is the one that eventually runs.
+  //
+  // A server that never asks for a hold gets upstream behaviour exactly.
   private onCreateActorMessage(event: ConnectionMessage<CreateActorMessage>): void {
+    if (event.message.isMe) {
+      const gate = this.controller.lookupListener(SeatGateService);
+      if (gate.shouldHold()) {
+        gate.holdSeat(event, (held) => this.onCreateActorMessageImpl(held));
+        return;
+      }
+    }
+    this.onCreateActorMessageImpl(event);
+  }
+
+  private onCreateActorMessageImpl(event: ConnectionMessage<CreateActorMessage>): void {
     const msg = event.message;
     if (this.skipFormViewCreation(msg)) {
       const refrId = msg.refrId!;

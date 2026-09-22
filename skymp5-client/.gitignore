@@ -7,3 +7,4 @@ build
 *.log
 *.pex
 *.pas
+package-lock.json
