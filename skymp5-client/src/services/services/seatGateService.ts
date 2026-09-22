@@ -1,4 +1,6 @@
+import { MsgType } from "../../messages";
 import { logError, logTrace } from "../../logging";
+import { BrowserMessageEvent } from "skyrimPlatform";
 import { ConnectionMessage } from "../events/connectionMessage";
 import { CreateActorMessage } from "../messages/createActorMessage";
 import { CustomPacketMessage } from "../messages/customPacketMessage";
@@ -49,6 +51,18 @@ const GATE_FIELD = "seatGate";
 const HOLD = "hold";
 const RELEASE = "release";
 
+/**
+ * The payload carried beside the gate word, and the way back.
+ *
+ * Both are OPAQUE. `VIEW_FIELD` is handed to the page as-is; `PAGE_MESSAGE` arrives from the page
+ * as a string and goes on the wire as that same string. This file never reads a key out of either.
+ * That is what lets the same two names carry a character list today and something else tomorrow
+ * without the client being taught anything about a realm's design.
+ */
+const VIEW_FIELD = "seatView";
+const PAGE_MESSAGE = "thuum-seat";
+const PAGE_OBJECT = "window.thuumSeat";
+
 type HeldSeat = {
   event: ConnectionMessage<CreateActorMessage>;
   run: (event: ConnectionMessage<CreateActorMessage>) => void;
@@ -58,6 +72,7 @@ export class SeatGateService extends ClientListener {
   constructor(private sp: Sp, private controller: CombinedController) {
     super();
     this.controller.emitter.on("customPacketMessage", (e) => this.onCustomPacketMessage(e));
+    this.controller.on("browserMessage", (e) => this.onBrowserMessage(e));
     this.controller.on("tick", () => this.onTick());
   }
 
@@ -92,9 +107,13 @@ export class SeatGateService extends ClientListener {
 
   private onCustomPacketMessage(event: ConnectionMessage<CustomPacketMessage>): void {
     let word: unknown;
+    // Lifted out of the try beside `word`, because the payload has to outlive the parse. It is
+    // carried, never read: see the note on VIEW_FIELD.
+    let view: unknown;
     try {
       const content = JSON.parse(event.message.contentJsonDump) as Record<string, unknown>;
       word = content ? content[GATE_FIELD] : undefined;
+      view = content ? content[VIEW_FIELD] : undefined;
     } catch (e) {
       // Not ours, or not JSON. Every other packet on this connection comes through here, so this is
       // the ordinary case and must stay silent.
@@ -109,16 +128,79 @@ export class SeatGateService extends ClientListener {
         logTrace(this, "The realm asked us to hold - no character will be seated until it says so");
       }
       this.holding = true;
+      this.showOnPage(view);
       return;
     }
 
     if (word === RELEASE) {
       this.holding = false;
+      this.hideOnPage();
       this.release("the realm said who");
       return;
     }
 
     logError(this, `Ignoring an unknown ${GATE_FIELD} value:`, JSON.stringify(word));
+  }
+
+  /**
+   * Hand the payload to the page. It is re-serialised, not inspected: whatever the realm put there
+   * arrives at the page in the same shape it was sent, and nothing in between formed an opinion.
+   */
+  private showOnPage(view: unknown): void {
+    if (view === undefined || view === null) {
+      return;
+    }
+    let json: string;
+    try {
+      json = JSON.stringify(view);
+    } catch (e) {
+      logError(this, "A seat payload could not be re-serialised for the page:", e);
+      return;
+    }
+    try {
+      this.sp.browser.setVisible(true);
+      this.sp.browser.setFocused(true);
+      this.sp.browser.executeJavaScript(`${PAGE_OBJECT} && ${PAGE_OBJECT}.show(${json})`);
+    } catch (e) {
+      // The page may not be up yet. The realm re-sends while it is still holding, so this is not
+      // the last chance - but it is worth saying, because a silent failure here is a player looking
+      // at a menu with nothing on it.
+      logError(this, "Could not put the seat payload on the page:", e);
+    }
+  }
+
+  private hideOnPage(): void {
+    try {
+      this.sp.browser.executeJavaScript(`${PAGE_OBJECT} && ${PAGE_OBJECT}.hide()`);
+      this.sp.browser.setFocused(false);
+    } catch (e) {
+      // Nothing to do about it, and the world is about to load over the top anyway.
+    }
+  }
+
+  /**
+   * The way back. The page hands over a string; it goes on the wire as that string.
+   *
+   * Not parsed, not validated, not re-encoded. The realm is the only thing that understands what
+   * is in it, and the realm checks it - `selectCharacter` tests ownership against the server's own
+   * list precisely because a page is a thing a player can edit. Validating here would be a second,
+   * weaker copy of a check that has to exist there anyway.
+   */
+  private onBrowserMessage(e: BrowserMessageEvent): void {
+    const a = e && e.arguments;
+    if (!a || a[0] !== PAGE_MESSAGE) {
+      return;
+    }
+    const payload = a[1];
+    if (typeof payload !== "string") {
+      logError(this, `${PAGE_MESSAGE} needs a string payload, got`, typeof payload);
+      return;
+    }
+    logTrace(this, "Passing the page's answer to the realm");
+    this.controller.emitter.emit("sendMessage", {
+      message: { t: MsgType.CustomPacket, contentJsonDump: payload },
+      reliability: "reliable",
+    });
   }
 
   private onTick(): void {
@@ -138,6 +220,7 @@ export class SeatGateService extends ClientListener {
       + `realm, not in the player's game.`,
     );
     this.holding = false;
+    this.hideOnPage();
     this.release("the hold expired");
   }
 
