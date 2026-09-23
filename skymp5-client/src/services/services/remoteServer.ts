@@ -245,6 +245,26 @@ export class RemoteServer extends ClientListener {
 
   private onTeleportMessage(event: ConnectionMessage<TeleportMessage> | ConnectionMessage<TeleportMessage2>): void {
     const msg = event.message;
+    // THU'UM ONLINE FORK CHANGE. A teleport that arrives while a seat is held is discarded.
+    //
+    // Upstream queues every teleport on once('update') - the first frame after a world exists -
+    // and that was harmless when a world always already existed: the player moved, and that was
+    // all. The gate made load and move coincide. A realm that makes a character at the menu adopts
+    // the body stock spawn seated and moves it to the creation spot; the server sends that move as
+    // a Teleport to the user attached to the body, the seat released a moment later carries the SAME
+    // transform, loadGame lands the player there, and then the queued teleport fires on the first
+    // frame and moves the player into the cell they are already standing in - a cell transition on
+    // top of a load that finished 400 ms earlier. On 2026-09-23 that wedged the game at the loading
+    // screen with the platform log stopping on that very frame.
+    //
+    // So while a seat is held, teleports are discarded - all of them, because at the main menu there
+    // is no world for any of them to apply to, and the one that matters is superseded by the seat.
+    // Same shape as the hold: nothing in the message is read to decide this.
+    const gate = this.controller.lookupListener(SeatGateService);
+    if (gate.isHolding()) {
+      logTrace(this, `Discarding a teleport that arrived while a seat is held - the seat carries the transform`);
+      return;
+    }
     once('update', () => {
       const id = ("idx" in msg && typeof msg.idx === "number") ? this.getIdManager().getId(msg.idx) : this.getMyActorIndex();
       const refr = id === this.getMyActorIndex() ? Game.getPlayer() : getObjectReference(id);
