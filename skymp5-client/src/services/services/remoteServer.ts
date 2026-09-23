@@ -662,6 +662,19 @@ export class RemoteServer extends ClientListener {
     const msg = event.message;
 
     const i = this.getIdManager().getId(msg.idx);
+    // THU'UM ONLINE FORK CHANGE. A Destroy for an actor this client never allocated is nothing to
+    // do, and upstream did something with it: getId() answers -1 for an unknown index, the world
+    // model's playerCharacterFormIdx is ALSO -1 while nobody is seated, and the equality below then
+    // read "the player's own actor was destroyed" and queued Game.quitToMainMenu() for the next
+    // update. Unreachable upstream, because a CreateActorMessage{isMe} is always applied before
+    // anything else can arrive. With the seat gate it is the ordinary case: the realm re-seats the
+    // player on the body it adopted at creation, the server unsubscribes and resubscribes that body,
+    // and the Destroy arrives while the seat is still held - unallocated. The quit then fired on the
+    // first frame of the world the released seat had just loaded (2026-09-23 00:35 UTC).
+    if (i === -1) {
+      logTrace(this, `Ignoring a destroy for idx`, msg.idx, `- never allocated on this client`);
+      return;
+    }
     this.worldModel.forms[i] = undefined;
     getViewFromStorage()?.syncFormArray(this.worldModel);
 
